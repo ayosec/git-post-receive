@@ -1,6 +1,7 @@
 #!/bin/sh
 #
 # Copyright (c) 2007 Andy Parkins
+# Copyright (c) 2009 Ayose Cazorla
 #
 # An example hook script to mail out commit update information.  This hook
 # sends emails listing new revisions to the repository introduced by the
@@ -53,6 +54,23 @@
 #
 
 # ---------------------------- Functions
+
+format_pre_output()
+{
+    echo "<pre>"
+    head -c 76800 | perl -pe '
+        s/&/&amp;/g;
+        s/</&lt;/g;
+        s/>/&gt;/g;
+        s/^diff .*$/<b>$&<\/b>/g;
+        s/^(\+\+\+|---) .*$/<i>$&<\/i>/g;
+        s/^\+.*$/<div style="margin: 0; background: #dfd">$&<\/div>/g;
+        s/^-.*$/<div style="margin: 0; background: #fee">$&<\/div>/g;
+        s/^(commit|author:|date:) .*$/<div style="margin: 0; background: #ffc">$&<\/div>/gi;
+        s/(<\/div>)\n/$1/gmi;
+    '
+    echo "</pre>"
+}
 
 #
 # Top level email generation function.  This decides what type of update
@@ -166,7 +184,7 @@ generate_email()
 	# that we can build from the parameters
 	describe=$(git describe $rev 2>/dev/null)
 	if [ -z "$describe" ]; then
-		describe=$rev
+		describe="$(git log --pretty=oneline $oldrev..$newrev | wc -l) commit(s)"
 	fi
 
 	generate_email_header
@@ -192,17 +210,14 @@ generate_email_header()
 	# Generate header
 	cat <<-EOF
 	To: $recipients
-	Subject: ${emailprefix}$projectdesc $refname_type, $short_refname, ${change_type}d. $describe
+	Subject: ${emailprefix} $projectdesc $refname_type, $short_refname, ${change_type}d. $describe
 	X-Git-Refname: $refname
 	X-Git-Reftype: $refname_type
 	X-Git-Oldrev: $oldrev
 	X-Git-Newrev: $newrev
+	Content-Type: text/html
 
-	This is an automated email from the git hooks/post-receive script. It was
-	generated because a ref change was pushed to the repository containing
-	the project "$projectdesc".
-
-	The $refname_type, $short_refname has been ${change_type}d
+	<h1>$refname_type: $short_refname has been ${change_type}d</h1>
 	EOF
 }
 
@@ -211,9 +226,12 @@ generate_email_footer()
 	SPACE=" "
 	cat <<-EOF
 
-
-	hooks/post-receive
-	--${SPACE}
+        <p><small>
+	This is an automated email from the git hooks/post-receive script. It was
+	generated because a ref change was pushed to the repository containing
+	the project "$projectdesc".
+        </small></p>
+	--${SPACE}<br />
 	$projectdesc
 	EOF
 }
@@ -226,11 +244,10 @@ generate_email_footer()
 generate_create_branch_email()
 {
 	# This is a new branch and so oldrev is not valid
-	echo "        at  $newrev ($newrev_type)"
-	echo ""
+	echo "        <ul><li>at  <tt>$newrev</tt> ($newrev_type)</li></ul>"
 
 	echo $LOGBEGIN
-	show_new_revisions
+        show_new_revisions | format_pre_output
 	echo $LOGEND
 }
 
@@ -330,15 +347,18 @@ generate_update_branch_email()
 	# have already had notification emails and is present to show the
 	# full detail of the change from rolling back the old revision to
 	# the base revision and then forward to the new revision
+        echo "<ul>"
 	for rev in $(git rev-list $oldrev..$newrev)
 	do
 		revtype=$(git cat-file -t "$rev")
-		echo "       via  $rev ($revtype)"
+		echo "       <li>via  <tt>$rev</tt> ($revtype)</li>"
 	done
 
 	if [ "$fast_forward" ]; then
-		echo "      from  $oldrev ($oldrev_type)"
+		echo "      <li>from  <tt>$oldrev</tt> ($oldrev_type)</li>"
+                echo "</ul>"
 	else
+                echo "</ul>"
 		#  1. Existing revisions were removed.  In this case newrev
 		#     is a subset of oldrev - this is the reverse of a
 		#     fast-forward, a rewind
@@ -349,12 +369,13 @@ generate_update_branch_email()
 		# happened, we set a flag to indicate that no log printout
 		# is required.
 
-		echo ""
+		echo "<br />"
 
 		# Find the common ancestor of the old and new revisions and
 		# compare it with newrev
 		baserev=$(git merge-base $oldrev $newrev)
 		rewind_only=""
+                echo "<pre>"
 		if [ "$baserev" = "$newrev" ]; then
 			echo "This update discarded existing revisions and left the branch pointing at"
 			echo "a previous point in the repository history."
@@ -380,25 +401,7 @@ generate_update_branch_email()
 			echo "of the O revisions, and so we here report only the revisions in the N"
 			echo "branch from the common base, B."
 		fi
-	fi
-
-	echo ""
-	if [ -z "$rewind_only" ]; then
-		echo "Those revisions listed above that are new to this repository have"
-		echo "not appeared on any other notification email; so we list those"
-		echo "revisions in full, below."
-
-		echo ""
-		echo $LOGBEGIN
-		show_new_revisions
-
-		# XXX: Need a way of detecting whether git rev-list actually
-		# outputted anything, so that we can issue a "no new
-		# revisions added by this update" message
-
-		echo $LOGEND
-	else
-		echo "No new revisions were added by this update."
+                echo "</pre>"
 	fi
 
 	# The diffstat is shown from the old revision to the new revision.
@@ -408,9 +411,30 @@ generate_update_branch_email()
 	# point - the user will be interested in what this revision changed
 	# - including the undoing of previous revisions in the case of
 	# non-fast forward updates.
-	echo ""
-	echo "Summary of changes:"
-	git diff-tree --stat --summary --find-copies-harder $oldrev..$newrev
+	echo "<h2>Summary of changes:</h2>"
+        echo "<div style=\"background: #eee; padding: 1em\">"
+	git diff-tree --stat --summary --find-copies-harder $oldrev..$newrev | format_pre_output
+        echo "</div>"
+
+	echo "<br />"
+
+	if [ -z "$rewind_only" ]; then
+		echo "<p><small>Those revisions listed above that are new to this repository have"
+		echo "not appeared on any other notification email; so we list those"
+		echo "revisions in full, below.</small></p>"
+
+		echo "<br />"
+		echo $LOGBEGIN
+		show_new_revisions | format_pre_output
+
+		# XXX: Need a way of detecting whether git rev-list actually
+		# outputted anything, so that we can issue a "no new
+		# revisions added by this update" message
+
+		echo $LOGEND
+	else
+		echo "<b>No new revisions were added by this update.</b>"
+	fi
 }
 
 #
@@ -643,8 +667,8 @@ send_mail()
 # ---------------------------- main()
 
 # --- Constants
-LOGBEGIN="- Log -----------------------------------------------------------------"
-LOGEND="-----------------------------------------------------------------------"
+LOGBEGIN="<pre>"
+LOGEND="</pre>"
 
 # --- Config
 # Set GIT_DIR either from the working directory, or from the environment
@@ -666,7 +690,7 @@ fi
 recipients=$(git config hooks.mailinglist)
 announcerecipients=$(git config hooks.announcelist)
 envelopesender=$(git config hooks.envelopesender)
-emailprefix=$(git config hooks.emailprefix || echo '[SCM] ')
+emailprefix=$(git config hooks.emailprefix || echo '[SCM]')
 custom_showrev=$(git config hooks.showrev)
 
 # --- Main loop
