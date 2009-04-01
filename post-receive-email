@@ -184,7 +184,7 @@ generate_email()
 	# that we can build from the parameters
 	describe=$(git describe $rev 2>/dev/null)
 	if [ -z "$describe" ]; then
-		describe="$(git log --pretty=oneline $oldrev..$newrev | wc -l) commit(s)"
+		describe="$(git log --pretty=oneline $oldrev..$newrev | wc -l) commit(s) `echo $oldrev | head -c 6`..`echo $newrev | head -c 6`"
 	fi
 
 	generate_email_header
